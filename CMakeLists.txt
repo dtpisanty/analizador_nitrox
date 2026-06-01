@@ -3,7 +3,7 @@
 cmake_minimum_required(VERSION 3.13)
 
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Initialise pico_sdk from installed location
@@ -33,9 +33,21 @@ project(analizador_nitrox C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-# Add executable. Default name is the project name, version 0.1
+add_library(pico_displaylib_16 INTERFACE)
 
-add_executable(analizador_nitrox analizador_nitrox.c )
+target_include_directories(pico_displaylib_16 INTERFACE
+    ${CMAKE_CURRENT_LIST_DIR}/lib/displaylib_16bit_PICO/include
+)
+
+target_sources(pico_displaylib_16 INTERFACE
+    ${CMAKE_CURRENT_LIST_DIR}/lib/displaylib_16bit_PICO/src/displaylib_16/st7735.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/lib/displaylib_16bit_PICO/src/displaylib_16/displaylib_16_graphics.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/lib/displaylib_16bit_PICO/src/displaylib_16/displaylib_16_Print.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/lib/displaylib_16bit_PICO/src/displaylib_16/displaylib_16_Font.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/lib/displaylib_16bit_PICO/src/displaylib_16/displaylib_16_common.cpp
+)
+
+add_executable(analizador_nitrox analizador_nitrox.cpp)
 
 pico_set_program_name(analizador_nitrox "analizador_nitrox")
 pico_set_program_version(analizador_nitrox "0.1")
@@ -46,17 +58,16 @@ pico_enable_stdio_usb(analizador_nitrox 1)
 
 # Add the standard library to the build
 target_link_libraries(analizador_nitrox
-        pico_stdlib)
+        pico_stdlib
+        hardware_i2c
+        hardware_spi
+        pico_displaylib_16
+)
 
 # Add the standard include files to the build
 target_include_directories(analizador_nitrox PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
 )
-
-# Add any user requested libraries
-target_link_libraries(analizador_nitrox 
-        hardware_i2c
-        )
 
 pico_add_extra_outputs(analizador_nitrox)
 
