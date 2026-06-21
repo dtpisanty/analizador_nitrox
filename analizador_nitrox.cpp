@@ -20,10 +20,13 @@
 #define DEBOUNCE_MS 100
 #define LONG_PRESS_MS 3000
 
+//Physical constants
+#define METERS_PER_ATM_SALT  10
+#define METERS_PER_ATM_FRESH 11
+#define O2_FRACTION_AIR      0.209f
 // GLOBALS
 ST7735_TFT myTFT;
 void Setup(void);
-void DisplayReset(void);
 float cal_mv;
 int meters_per_atm;
 
@@ -66,7 +69,7 @@ int16_t ads1115_read_ch(uint8_t channel){
     i2c_write_blocking(I2C_PORT,ADS1115_ADDR,&reg,1,false);
     uint8_t raw[2];
     i2c_read_blocking(I2C_PORT,ADS1115_ADDR,raw,2,false);
-    return (uint16_t)((raw[0]<<8)| raw[1]);
+    return (int16_t)((raw[0]<<8)| raw[1]);
 }
 
 float reading_to_mv(uint16_t reading){
@@ -79,7 +82,7 @@ void Setup(void)
 	MILLISEC_DELAY(1000);
     ads1115_init();
 	printf("TFT Start\r\n");
-    meters_per_atm=10;
+    meters_per_atm=METERS_PER_ATM_SALT;
 	//*************** USER OPTION 0 SPI_SPEED + TYPE ***********
 	bool bhardwareSPI = true; // true for hardware spi,
 	if (bhardwareSPI == true)
@@ -120,29 +123,17 @@ void Setup(void)
     gpio_set_dir(BUTTON_GPIO, GPIO_IN);
     gpio_pull_up(BUTTON_GPIO);
 }
-
-// float variance(float *list, int length,float mean){
-//     float sq_diff=0;
-//     for(int i=0;i<length;i++){
-//         sq_diff+=(list[i]-mean)*(list[i]-mean);
-//     }
-//     return sq_diff/length;
-// }
-
 float mv_to_fracO2(float mv){
     //%o2=mv*(3.92339494163424k)+0.68
     //return mv*79.1/(3.634146341*cal_mv)+0.68;
     return mv/cal_mv*.209;
 }
 
-float mod_14(float fracO2){
-    return meters_per_atm*(1.4/fracO2-1);
-}
-float mod_16(float fracO2){
-    return meters_per_atm*(1.6/fracO2-1);
+float mod_at_ppo2(float fracO2, float target_ppo2){
+    return meters_per_atm*(target_ppo2/fracO2-1);
 }
 
-void callibrate(){
+void calibrate(){
     cal_mv=0;
     for(int i=0;i<READINGS;i++){
         uint16_t val=ads1115_read_ch(0);
@@ -179,17 +170,17 @@ void button_update() {
                 // released before long-press threshold → short press action
                 int64_t held_ms = absolute_time_diff_us(press_start_time, get_absolute_time()) / 1000;
                 if (held_ms < LONG_PRESS_MS) {
-                    if (meters_per_atm==10){
-                        meters_per_atm=11;
+                    if (meters_per_atm==METERS_PER_ATM_SALT){
+                        meters_per_atm=METERS_PER_ATM_FRESH;
                     }
                     else{
-                        meters_per_atm=10;
+                        meters_per_atm=METERS_PER_ATM_SALT;
                     }
                 }
                 btn_state = BTN_IDLE;
             } else if (absolute_time_diff_us(press_start_time, get_absolute_time()) > LONG_PRESS_MS * 1000) {
                 // still held, threshold crossed → trigger calibration NOW
-                callibrate();
+                calibrate();
                 btn_state = BTN_LONG_TRIGGERED;
             }
             break;
@@ -211,11 +202,12 @@ int main(){
 	myTFT.setFont(font_pico);
 	myTFT.println("INICIANDO");
     sleep_ms(5000);
-    callibrate();
+    calibrate();
     while (true) {
+        button_update();
         float millivolts[READINGS];
         float mean_mv=0;
-        for(int i=0;i<READINGS;i++){
+        for(int i=0;i<READINGS/3;i++){
             uint16_t val=ads1115_read_ch(0);
             millivolts[i]=reading_to_mv(val);
             mean_mv+=millivolts[i];
@@ -232,22 +224,20 @@ int main(){
         myTFT.setCursor(5,40);
         myTFT.setTextColor(myTFT.C_YELLOW, myTFT.C_BLACK);
         myTFT.setFont(font_pico);
-        char water_type = (meters_per_atm == 10) ? 'S' : 'F';
+        char water_type = (meters_per_atm == METERS_PER_ATM_SALT) ? 'S' : 'F';
         char buf[20];
         snprintf(buf, sizeof(buf), "MOD 1.4 (M%cW)", water_type);
         myTFT.println(buf);
         myTFT.setFont(font_arialBold);
-        myTFT.print(mod_14(frac_o2));//mean_mv*20.9/cal_mv);
+        myTFT.print(mod_at_ppo2(frac_o2,1.4));//mean_mv*20.9/cal_mv);
         myTFT.print("m");
         myTFT.setCursor(5,70);
         myTFT.setTextColor(myTFT.C_YELLOW, myTFT.C_BLACK);
         myTFT.setFont(font_pico);
         snprintf(buf, sizeof(buf), "MOD 1.6 (M%cW)", water_type);
         myTFT.setFont(font_arialBold);
-        myTFT.print(mod_16(frac_o2));//mean_mv*20.9/cal_mv);
+        myTFT.print(mod_at_ppo2(frac_o2,1.6));//mean_mv*20.9/cal_mv);
         myTFT.print("m");
         printf("Mean Voltage:%.3f mV\n",mean_mv);
-        // printf("Variance:%.3f mV\n",variance(millivolts,READINGS,mean_mv));
-        // sleep_ms(300);
     }
 }
