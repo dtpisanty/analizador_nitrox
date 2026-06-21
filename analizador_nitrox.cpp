@@ -12,29 +12,31 @@
 #define ADS1115_ADDR 0b1001000
 #define CONV_REG 0x00
 #define CONF_REG 0x01
-#define READINGS 100
+#define CAL_READINGS 100
 #define MAIN_LOOP_READINGS 33
 
 // Mode button
 #define BUTTON_GPIO 15
-#define DEBOUNCE_MS 100
+#define DEBOUNCE_MS 50
 #define LONG_PRESS_MS 3000
 
 //Physical constants
-#define METERS_PER_ATM_SALT  10
-#define METERS_PER_ATM_FRESH 11
+// #define METERS_PER_ATM_SALT  10.0f
+// #define METERS_PER_ATM_FRESH 10.3f
 #define O2_FRACTION_AIR      0.209f
 
 // Thresholds based on SGX-VOX datasheet (9-13mV @ STP) adjusted for your altitude
 #define CAL_MV_WARN_THRESHOLD   7.5f  
 #define CAL_MV_ERROR_THRESHOLD  5.0f   
-#define CAL_VARIANCE_THRESHOLD  0.5f
+#define CAL_VARIANCE_THRESHOLD  0.025f
 
 // GLOBALS
 ST7735_TFT myTFT;
 void Setup(void);
 float cal_mv;
-int meters_per_atm;
+const float METERS_PER_ATM_SALT=10.0;
+const float METERS_PER_ATM_FRESH=10.3;
+float meters_per_atm=METERS_PER_ATM_SALT;
 bool reliable=false;
 
 //Button
@@ -97,7 +99,7 @@ void Setup(void)
 	stdio_init_all(); // optional for error messages , Initialize chosen serial port, default 38400 baud
 	MILLISEC_DELAY(1000);
     ads1115_init();
-	printf("TFT Start\r\n");
+	//printf("TFT Start\r\n");
     meters_per_atm=METERS_PER_ATM_SALT;
 	//*************** USER OPTION 0 SPI_SPEED + TYPE ***********
 	bool bhardwareSPI = true; // true for hardware spi,
@@ -133,7 +135,7 @@ void Setup(void)
 	// ******************************************
 
 	// ******** USER OPTION 3 PCB_TYPE  **************************
-	myTFT.TFTInitPCBType(myTFT.TFT_ST7735R_Red); // pass enum,4 choices,see README
+	myTFT.TFTInitPCBType(myTFT.TFT_ST7735S_Black); // pass enum,4 choices,see README
 	//**********************************************************
     gpio_init(BUTTON_GPIO);
     gpio_set_dir(BUTTON_GPIO, GPIO_IN);
@@ -177,11 +179,9 @@ void wait_for_button_press(){
 
 void show_cal_status_and_wait(cal_status_t status){
     if (status == CAL_OK) return;  // nothing to acknowledge
-
-    myTFT.fillScreen(myTFT.C_BLACK);
     myTFT.setCursor(5,10);
     myTFT.setFont(font_pico);
-
+    myTFT.fillScreen(myTFT.C_BLACK);
     switch(status){
         case CAL_WARN_LOW_MV:
             myTFT.setTextColor(myTFT.C_YELLOW, myTFT.C_BLACK);
@@ -213,15 +213,23 @@ void show_cal_status_and_wait(cal_status_t status){
 }
 
 cal_status_t callibrate(){
-    float millivolts[READINGS];
+    myTFT.fillScreen(myTFT.C_BLACK);
+    myTFT.setCursor(5,40);
+	myTFT.setFont(font_pico);
+	myTFT.println("CALIBRATING");
+
+    float millivolts[CAL_READINGS];
     cal_mv=0;
-    for(int i=0;i<READINGS;i++){
+    for(int i=0;i<CAL_READINGS;i++){
         uint16_t val=ads1115_read_ch(0);
         millivolts[i]=reading_to_mv(val);
         cal_mv+=millivolts[i];
     }
-    cal_mv/=READINGS;
-    float cal_variance = variance(millivolts, READINGS, cal_mv);
+    cal_mv/=CAL_READINGS;
+    float cal_variance = variance(millivolts, CAL_READINGS, cal_mv);
+    //printf("CAL Mean Voltage:%.3f mV\n",cal_mv);
+    //printf("CAL Variance:%.3f mV\n",cal_variance);
+    sleep_ms(10000);
     if (cal_variance > CAL_VARIANCE_THRESHOLD) {
         reliable=false;
         return CAL_ERROR_HIGH_VARIANCE;
@@ -235,19 +243,23 @@ cal_status_t callibrate(){
         return CAL_WARN_LOW_MV;
     }
     reliable=true;
+    myTFT.fillScreen(myTFT.C_BLACK);
     return CAL_OK;
 }
 
 void button_update() {
     bool pressed = !gpio_get(BUTTON_GPIO);  // active LOW (pulled up)
+    //printf("PRESSED: %d\n",pressed);
     switch (btn_state) {
         case BTN_IDLE:
+            //printf("IDLE\n");
             if (pressed) {
                 debounce_start_time = get_absolute_time();
                 btn_state = BTN_DEBOUNCING;
             }
             break;
         case BTN_DEBOUNCING:
+            //printf("DEBOUNCE\n");
             if (!pressed) {
                 // bounced, false trigger
                 btn_state = BTN_IDLE;
@@ -258,25 +270,26 @@ void button_update() {
             }
             break;
         case BTN_HELD:
+            //printf("HELD\n");
             if (!pressed) {
                 // released before long-press threshold → short press action
                 int64_t held_ms = absolute_time_diff_us(press_start_time, get_absolute_time()) / 1000;
-                if (held_ms < LONG_PRESS_MS) {
-                    if (meters_per_atm==METERS_PER_ATM_SALT){
-                        meters_per_atm=METERS_PER_ATM_FRESH;
-                    }
-                    else{
-                        meters_per_atm=METERS_PER_ATM_SALT;
-                    }
+                if (meters_per_atm==METERS_PER_ATM_SALT){
+                    meters_per_atm=METERS_PER_ATM_FRESH;
                 }
+                else{
+                    meters_per_atm=METERS_PER_ATM_SALT;
+                }
+                //printf("%f\n",meters_per_atm);
                 btn_state = BTN_IDLE;
             } else if (absolute_time_diff_us(press_start_time, get_absolute_time()) > LONG_PRESS_MS * 1000) {
                 cal_status_t status = callibrate();
-                show_cal_status_and_wait(status);   // blocks until acknowledged, same as startup
+                show_cal_status_and_wait(status);
                 btn_state = BTN_LONG_TRIGGERED;
             }
             break;
         case BTN_LONG_TRIGGERED:
+            //printf("LONG\n");
             // wait here until released, so calibration doesn't fire repeatedly
             if (!pressed) {
                 btn_state = BTN_IDLE;
@@ -286,12 +299,12 @@ void button_update() {
 }
 
 int main(){
-    Setup();
     myTFT.fillScreen(myTFT.C_BLACK);
     myTFT.setCursor(5,40);
-	myTFT.setFont(font_pico);
-	myTFT.println("INICIANDO");
-    sleep_ms(5000);
+	myTFT.setFont(font_arialBold);
+	myTFT.println("WARM UP");
+    Setup();
+    sleep_ms(4000);
     cal_status_t status = callibrate();
     show_cal_status_and_wait(status);   // blocks here if WARN or ERROR
     while (true) {
@@ -303,11 +316,12 @@ int main(){
                 uint16_t val=ads1115_read_ch(0);
                 millivolts[i]=reading_to_mv(val);
                 mean_mv+=millivolts[i];
+                button_update();
             }
             mean_mv/=MAIN_LOOP_READINGS;
             float frac_o2=mv_to_fracO2(mean_mv);
             if(frac_o2>1){frac_o2=1.0;}
-            myTFT.fillScreen(myTFT.C_BLACK);
+            // myTFT.fillScreen(myTFT.C_BLACK);
             myTFT.setCursor(5,10);
             myTFT.setTextColor(myTFT.C_GREEN, myTFT.C_BLACK);
             myTFT.setFont(font_arialBold);
@@ -321,17 +335,28 @@ int main(){
             snprintf(buf, sizeof(buf), "MOD 1.4 (M%cW)", water_type);
             myTFT.println(buf);
             myTFT.setFont(font_arialBold);
-            myTFT.print(mod_at_ppo2(frac_o2,1.4));//mean_mv*20.9/cal_mv);
+            myTFT.print(mod_at_ppo2(frac_o2,1.4));
             myTFT.print("m");
-            myTFT.setCursor(5,70);
+            myTFT.setCursor(5,80);
             myTFT.setTextColor(myTFT.C_YELLOW, myTFT.C_BLACK);
             myTFT.setFont(font_pico);
             snprintf(buf, sizeof(buf), "MOD 1.6 (M%cW)", water_type);
+            myTFT.println(buf);
             myTFT.setFont(font_arialBold);
             myTFT.print(mod_at_ppo2(frac_o2,1.6));//mean_mv*20.9/cal_mv);
             myTFT.print("m");
-            printf("Mean Voltage:%.3f mV\n",mean_mv);
-            printf("Variance:%.3f mV\n",variance(millivolts,MAIN_LOOP_READINGS,mean_mv));
+            //printf("Mean Voltage:%.3f mV\n",mean_mv);
+            //printf("Variance:%.3f mV\n",variance(millivolts,MAIN_LOOP_READINGS,mean_mv));
+        }
+        else{
+            myTFT.fillScreen(myTFT.C_RED);
+            myTFT.setCursor(5,40);
+            myTFT.setFont(font_arialBold);
+            myTFT.setTextColor(myTFT.C_WHITE, myTFT.C_RED);
+            myTFT.println("CHECK");
+            myTFT.println("SENSOR");
+            sleep_ms(1000);
         }
     }
+
 }
