@@ -14,6 +14,7 @@
 #define CONV_REG 0x00
 #define CONF_REG 0x01
 #define READINGS 100
+#define MAIN_LOOP_READINGS 33
 
 // Mode button
 #define BUTTON_GPIO 15
@@ -205,14 +206,12 @@ int main(){
     calibrate();
     while (true) {
         button_update();
-        float millivolts[READINGS];
         float mean_mv=0;
-        for(int i=0;i<READINGS/3;i++){
+        for(int i=0;i<MAIN_LOOP_READINGS;i++){
             uint16_t val=ads1115_read_ch(0);
-            millivolts[i]=reading_to_mv(val);
-            mean_mv+=millivolts[i];
+            mean_mv+=val;
         }
-        mean_mv/=READINGS;
+        mean_mv/=MAIN_LOOP_READINGS;
         float frac_o2=mv_to_fracO2(mean_mv);
         if(frac_o2>1){frac_o2=1.0;}
         myTFT.fillScreen(myTFT.C_BLACK);
